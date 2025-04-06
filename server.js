@@ -1,59 +1,97 @@
-const exp=require('express')
-const app=exp()
-require('dotenv').config()
-const mongoClient=require('mongodb').MongoClient
-const path=require('path')
-const { config } = require('dotenv')
+const express = require('express');
+const app = express();
+require('dotenv').config();
+const mongoClient = require('mongodb').MongoClient;
+const Razorpay = require('razorpay');
 const cors = require('cors');
+const path = require('path');
+
 app.use(cors());
+app.use(express.json());
 
-// app.use(exp.static(path.join(__dirname,'../frontend/build')))
-app.use(exp.json())
+const PORT = 4000;
 
+// Razorpay instance
+const razorpay = new Razorpay({
+  key_id: 'rzp_test_x9VFXB0K2sj7ev',
+  key_secret: 'Qu1w0cKbbd7Ermrz3WayFutN',
+});
+
+// MongoDB Connection
 mongoClient.connect(process.env.DB_URL)
-.then((client)=>{
-    const db=client.db(process.env.DB_NAME)
+  .then((client) => {
+    const db = client.db(process.env.DB_NAME);
 
-    const usersCollection=db.collection('usersCollection')
-    const adminCollection=db.collection('adminCollection')
-    const securityCollection=db.collection('securityCollection');
-    const roomCollection=db.collection('roomCollection');
-    const attCollection =db.collection('attCollection');
-    
+    // Collections
+    const usersCollection = db.collection('usersCollection');
+    const adminCollection = db.collection('adminCollection');
+    const securityCollection = db.collection('securityCollection');
+    const roomCollection = db.collection('roomCollection');
+    const attCollection = db.collection('attCollection');
+    const paymentsCollection = db.collection('paymentsCollection');
+    const mainCollection = db.collection('mainCollection');
+    const lfCollection = db.collection('lfCollections');
 
-    app.set('usersCollection',usersCollection)
-    app.set('adminCollection',adminCollection)
-    app.set('securityCollection',securityCollection);
-    app.set('roomCollection',roomCollection);
-    app.set('attCollection',attCollection);
-    app.set('mainCollection', db.collection('mainCollection'));
+    // Attach collections to app
+    app.set('usersCollection', usersCollection);
+    app.set('adminCollection', adminCollection);
+    app.set('securityCollection', securityCollection);
+    app.set('roomCollection', roomCollection);
+    app.set('attCollection', attCollection);
+    app.set('paymentsCollection', paymentsCollection);
+    app.set('mainCollection', mainCollection);
 
-    console.log('DB Connection success')
-})
-.catch((err)=>console.log('Error in db connection',err))
+    // ✅ Lost and Found Router
+    const initLostAndFoundRoutes = require('./api/lfApi');
+    app.use('/lost-items', initLostAndFoundRoutes(lfCollection));
 
-const userApp=require('./api/userApi')
-const adminApp=require('./api/adminApi')
-const securityApp=require('./api/securityApi')
-const roomsApp=require('./api/roomsApi');
-const attendanceApp = require('./api/attendanceApi');
-const leaveApp = require('./api/leaveRequestApi');
+    // ✅ API Routes
+    app.use('/user-api', require('./api/userApi'));
+    app.use('/admin-api', require('./api/adminApi'));
+    app.use('/security-api', require('./api/securityApi'));
+    app.use('/rooms-api', require('./api/roomsApi'));
+    app.use('/attendance-api', require('./api/attendanceApi'));
+    app.use('/leave-api', require('./api/leaveRequestApi'));
 
-app.use('/user-api',userApp)
-app.use('/admin-api',adminApp)
-app.use('/security-api',securityApp)
-app.use('/rooms-api',roomsApp);
-app.use('/attendance-api', attendanceApp);
-app.use('/leave-api', leaveApp);
+    // ✅ Save Payment Info
+    app.post('/api/payments', async (req, res) => {
+      try {
+        const paymentData = req.body;
+        paymentData.claimed = 'no';
+        await paymentsCollection.insertOne(paymentData);
+        res.send({ success: true });
+      } catch (err) {
+        console.error('❌ Payment Save Error:', err);
+        res.status(500).send({ success: false, message: err.message });
+      }
+    });
 
-// app.use((req,res,next)=>{
-//     res.sendFile(path.join(__dirname,'../frontend/build/index.html'))
-// })
+    // ✅ Razorpay Order Creation
+    app.post('/api/create-order', async (req, res) => {
+      const { amount } = req.body;
+      const options = {
+        amount: amount * 100,
+        currency: 'INR',
+        receipt: 'receipt_' + Date.now(),
+      };
 
-app.use((err,req,res,next)=>{
-    res.send({
-        err:err.message
-    }) 
-})
+      try {
+        const order = await razorpay.orders.create(options);
+        res.json(order);
+      } catch (err) {
+        console.error('❌ Razorpay Error:', err);
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
 
-app.listen(4000,()=>console.log("Server running on port 4000..."))
+    console.log('✅ DB Connection success');
+  })
+  .catch((err) => console.error('❌ DB Connection Failed:', err));
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+  res.status(500).send({ message: err.message });
+});
+
+// Start Server
+app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
